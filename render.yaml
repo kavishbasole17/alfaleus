@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: alfaleus-api
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: >
+      pip install --upgrade pip &&
+      pip install -r backend/requirements.txt &&
+      pip install llama-cpp-python==0.3.2 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu &&
+      playwright install chromium --with-deps
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: alfaleus-data
+      mountPath: /app/data
+      sizeGB: 5
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: DB_PATH
+        value: /app/data/alfaleus.db
+      - key: MODEL_PATH
+        value: /app/data/models/qwen2.5-0.5b-q4_k_m.gguf
+      - key: EMBEDDINGS_CACHE_DIR
+        value: /app/data/models
+      - key: SCREENSHOT_DIR
+        value: /app/data/screenshots
+      - key: LLM_ENABLED
+        value: "true"
+      - key: SCREENSHOTS_ENABLED
+        value: "true"
+      - key: SEMANTIC_THRESHOLD
+        value: "0.15"
+      - key: SCRAPE_INTERVAL_MINUTES
+        value: "360"
+      - key: API_KEY
+        generateValue: true
+      # Set these manually in Render dashboard:
+      # CORS_ORIGINS=https://your-app.vercel.app
+      # APP_URL=https://your-app.vercel.app
+      # NOTION_TOKEN, NOTION_DB_ID (optional)
+      # AIRTABLE_TOKEN, AIRTABLE_BASE_ID (optional)
+      # SMTP_USER, SMTP_PASS, DIGEST_TO (optional)

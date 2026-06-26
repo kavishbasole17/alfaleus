@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Alfaleus Extension Settings</title>
+  <style>
+    :root { --bg:#121212; --surface:#181818; --card:#242424; --border:#333; --accent:#1db954; --text:#fff; --text-sec:#b3b3b3; --text-muted:#6a6a6a; --r:8px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, 'Inter', system-ui, sans-serif; font-size: 15px; }
+    .page { max-width: 520px; margin: 48px auto; padding: 0 24px; }
+    .logo { font-size: 24px; font-weight: 900; letter-spacing: -1px; margin-bottom: 4px; }
+    .logo span { color: var(--accent); }
+    .subtitle { font-size: 14px; color: var(--text-muted); margin-bottom: 40px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); padding: 28px; }
+    .card-title { font-size: 16px; font-weight: 700; margin-bottom: 20px; }
+    .form-group { margin-bottom: 20px; }
+    label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+    input { width: 100%; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: var(--r); font-size: 14px; font-family: inherit; }
+    input:focus { outline: none; border-color: var(--accent); }
+    .hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+    .btn { padding: 11px 24px; background: var(--accent); color: #000; border: none; border-radius: var(--r); font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; }
+    .btn:hover { background: #1ed760; }
+    .saved { display: none; margin-left: 12px; color: var(--accent); font-size: 14px; font-weight: 600; }
+    .actions { display: flex; align-items: center; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="logo">alfa<span>leus</span></div>
+    <div class="subtitle">Extension Settings</div>
+
+    <div class="card">
+      <div class="card-title">API Configuration</div>
+
+      <div class="form-group">
+        <label>Backend API URL</label>
+        <input id="api-url" type="url" placeholder="https://your-app.onrender.com" />
+        <div class="hint">Your Render backend URL (no trailing slash).</div>
+      </div>
+
+      <div class="form-group">
+        <label>API Key</label>
+        <input id="api-key" type="password" placeholder="Your API_KEY env variable value" />
+        <div class="hint">Set in your backend's <code>API_KEY</code> environment variable.</div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="save-btn">Save Settings</button>
+        <span class="saved" id="saved-msg">✓ Saved!</span>
+      </div>
+    </div>
+  </div>
+  <script src="settings.js"></script>
+</body>
+</html>

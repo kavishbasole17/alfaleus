@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    :root {
+      --bg: #121212; --surface: #1a1a1a; --card: #242424;
+      --border: #333; --accent: #1db954; --text: #fff;
+      --text-sec: #b3b3b3; --text-muted: #6a6a6a;
+      --r: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 340px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, 'Inter', system-ui, sans-serif;
+      font-size: 14px;
+    }
+    .header {
+      background: #000;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo { font-size: 18px; font-weight: 900; letter-spacing: -0.5px; }
+    .logo span { color: var(--accent); }
+    .settings-link { font-size: 12px; color: var(--text-muted); cursor: pointer; }
+    .settings-link:hover { color: var(--accent); }
+    .body { padding: 20px; }
+    .field { margin-bottom: 14px; }
+    label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 5px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+    input, select {
+      width: 100%; padding: 9px 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: var(--r);
+      font-size: 14px;
+      font-family: inherit;
+    }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    .btn {
+      display: block; width: 100%; padding: 11px;
+      background: var(--accent); color: #000;
+      border: none; border-radius: var(--r);
+      font-size: 15px; font-weight: 700;
+      cursor: pointer; margin-top: 18px;
+      font-family: inherit;
+    }
+    .btn:hover { background: #1ed760; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .status {
+      margin-top: 12px; padding: 10px 14px;
+      border-radius: var(--r); font-size: 13px;
+      display: none;
+    }
+    .status.success { background: rgba(29,185,84,.1); border: 1px solid rgba(29,185,84,.3); color: var(--accent); }
+    .status.error   { background: rgba(226,33,52,.1); border: 1px solid rgba(226,33,52,.3); color: #e22134; }
+    .no-config {
+      padding: 24px 20px; text-align: center; color: var(--text-muted);
+      font-size: 13px; line-height: 1.6;
+    }
+    .no-config a { color: var(--accent); cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">alfa<span>leus</span></div>
+    <div class="settings-link" id="open-settings">⚙ Settings</div>
+  </div>
+
+  <div id="no-config" class="no-config" style="display:none">
+    API not configured. <a id="config-link">Open settings</a> to paste your API key.
+  </div>
+
+  <div id="form-area" class="body" style="display:none">
+    <div class="field">
+      <label>URL</label>
+      <input id="url" type="url" readonly />
+    </div>
+    <div class="field">
+      <label>Competitor Name *</label>
+      <input id="name" type="text" placeholder="Acme Corp" />
+    </div>
+    <div class="field">
+      <label>Section to Monitor</label>
+      <select id="section">
+        <option value="full">Full Page</option>
+        <option value="pricing">Pricing</option>
+        <option value="careers">Careers</option>
+      </select>
+    </div>
+    <button class="btn" id="track-btn">Track This Page</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
