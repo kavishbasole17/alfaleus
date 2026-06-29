@@ -90,7 +90,6 @@ export default function Feed() {
         <div className="loading-state"><span className="spinner" /> Loading…</div>
       ) : changes.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-icon">📭</div>
           <div className="empty-title">Nothing here yet</div>
           <div className="empty-desc">
             Changes will appear after the next scrape. Trigger one manually from a competitor card.

@@ -98,9 +98,9 @@ export default function CompetitorDetail() {
       {/* Stats */}
       <div className="detail-stats">
         {[
-          { value: changes.length,          label: "Total Changes", delay: 0 },
-          { value: comp.weekly_changes,      label: "This Week",     delay: 50 },
-          { value: avgScore,                 label: "Avg Score",     delay: 100 },
+          { value: changes.length,            label: "Total Changes", delay: 0   },
+          { value: comp.weekly_changes,        label: "This Week",    delay: 50  },
+          { value: avgScore,                   label: "Avg Score",    delay: 100 },
           { value: relTime(comp.last_checked), label: "Last Checked", delay: 150 },
         ].map(s => (
           <div key={s.label} className="detail-stat" style={{ animationDelay: `${s.delay}ms` }}>
@@ -152,7 +152,6 @@ export default function CompetitorDetail() {
 
       {changes.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-icon">📋</div>
           <div className="empty-title">No changes recorded</div>
           <div className="empty-desc">Trigger a scrape above to start tracking.</div>
         </div>

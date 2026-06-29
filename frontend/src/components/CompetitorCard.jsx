@@ -45,34 +45,31 @@ export default function CompetitorCard({ comp, onDeleted, animDelay = 0 }) {
         <div className={`status-dot status-${comp.status}`} title={comp.status} />
       </div>
 
-      <div className="cc-stats">
-        <div>
+      <div className="cc-stats-row">
+        <div className="cc-stat">
           <div className="stat-value">{comp.weekly_changes}</div>
-          <div className="stat-label">Changes this week</div>
+          <div className="stat-label">Changes / week</div>
         </div>
-        <div>
-          <div className="stat-value" style={{ fontSize: 13, paddingTop: 4 }}>
+        <div className="cc-stat">
+          <div className="stat-value" style={{ fontSize: 13, paddingTop: 3 }}>
             {relTime(comp.last_checked)}
           </div>
           <div className="stat-label">Last checked</div>
         </div>
       </div>
 
-      <span className="section-tag">{comp.section}</span>
-
-      <div className="cc-actions">
-        <button
-          className="btn btn-ghost btn-sm"
-          onClick={(e) => { e.stopPropagation(); navigate(`/competitor/${comp.id}`); }}
-        >
-          View
-        </button>
-        <button className="btn btn-ghost btn-sm" onClick={handleScrape}>
-          ↻ Scrape
-        </button>
-        <button className="btn btn-danger btn-sm" onClick={handleDelete}>
-          Delete
-        </button>
+      <div className="cc-footer">
+        <span className="section-tag">{comp.section}</span>
+        <div className="cc-actions">
+          <button
+            className="btn btn-ghost btn-xs"
+            onClick={(e) => { e.stopPropagation(); navigate(`/competitor/${comp.id}`); }}
+          >
+            View
+          </button>
+          <button className="btn btn-ghost btn-xs" onClick={handleScrape}>Scrape</button>
+          <button className="btn btn-danger btn-xs" onClick={handleDelete}>Delete</button>
+        </div>
       </div>
     </div>
   );
