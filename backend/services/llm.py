@@ -2,88 +2,26 @@ import os
 import json
 import difflib
 import logging
-import asyncio
-from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger("llm")
 
-MODEL_URL = (
-    "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/"
-    "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-)
-MODEL_PATH = os.getenv("MODEL_PATH", "/app/data/models/qwen2.5-0.5b-q4_k_m.gguf")
-LLM_ENABLED = os.getenv("LLM_ENABLED", "true").lower() == "true"
-
-_llm = None
-_model_ready = False
-
-
-async def download_model():
-    global _model_ready
-    if os.path.exists(MODEL_PATH):
-        _model_ready = True
-        logger.info(f"LLM model already present at {MODEL_PATH}")
-        return True
-
-    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-    logger.info(f"Downloading LLM model from HuggingFace to {MODEL_PATH} …")
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
-            async with client.stream("GET", MODEL_URL) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("content-length", 0))
-                downloaded = 0
-                with open(MODEL_PATH, "wb") as f:
-                    async for chunk in r.aiter_bytes(1024 * 512):
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total:
-                            pct = downloaded / total * 100
-                            if pct % 10 < 0.5:
-                                logger.info(f"  LLM download: {pct:.0f}%")
-        _model_ready = True
-        logger.info("LLM model downloaded successfully")
-        return True
-    except Exception as e:
-        logger.error(f"LLM model download failed: {e}")
-        if os.path.exists(MODEL_PATH):
-            os.remove(MODEL_PATH)
-        return False
-
-
-def _get_llm():
-    global _llm, _model_ready
-    if not LLM_ENABLED or not _model_ready:
-        return None
-    if _llm is not None:
-        return _llm
-    try:
-        from llama_cpp import Llama
-        _llm = Llama(
-            model_path=MODEL_PATH,
-            n_ctx=2048,
-            n_threads=1,
-            n_gpu_layers=0,
-            verbose=False,
-        )
-        logger.info("LLM loaded into memory")
-    except Exception as e:
-        logger.error(f"LLM load failed: {e}")
-    return _llm
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
 def model_status() -> dict:
     return {
-        "enabled": LLM_ENABLED,
-        "downloaded": os.path.exists(MODEL_PATH),
-        "ready": _model_ready,
-        "loaded": _llm is not None,
-        "path": MODEL_PATH,
+        "enabled": bool(OPENAI_API_KEY),
+        "provider": "openai",
+        "model": OPENAI_MODEL,
+        "ready": bool(OPENAI_API_KEY),
     }
 
 
-def _diff_text(old: str, new: str, max_chars: int = 3000) -> str:
+def _diff_text(old: str, new: str, max_chars: int = 4000) -> str:
     old_sents = [s.strip() for s in old.replace(". ", ".\n").split("\n") if s.strip()]
     new_sents = [s.strip() for s in new.replace(". ", ".\n").split("\n") if s.strip()]
     diff = list(difflib.unified_diff(old_sents, new_sents, lineterm="", n=2))
@@ -92,24 +30,11 @@ def _diff_text(old: str, new: str, max_chars: int = 3000) -> str:
 
 
 FALLBACK_CATEGORIES = {
-    "pric": "Pricing",
-    "plan": "Pricing",
-    "subscription": "Pricing",
-    "tier": "Pricing",
-    "feature": "Product/Feature",
-    "launch": "Product/Feature",
-    "product": "Product/Feature",
-    "hire": "Hiring",
-    "job": "Hiring",
-    "career": "Hiring",
-    "position": "Hiring",
-    "ceo": "Leadership",
-    "cto": "Leadership",
-    "founder": "Leadership",
-    "appointed": "Leadership",
-    "blog": "Content/Messaging",
-    "announce": "Content/Messaging",
-    "partner": "Content/Messaging",
+    "pric": "Pricing", "plan": "Pricing", "subscription": "Pricing", "tier": "Pricing",
+    "feature": "Product/Feature", "launch": "Product/Feature", "product": "Product/Feature",
+    "hire": "Hiring", "job": "Hiring", "career": "Hiring", "position": "Hiring",
+    "ceo": "Leadership", "cto": "Leadership", "founder": "Leadership", "appointed": "Leadership",
+    "blog": "Content/Messaging", "announce": "Content/Messaging", "partner": "Content/Messaging",
 }
 
 
@@ -131,15 +56,14 @@ async def analyze_change(
 ) -> dict:
     diff = _diff_text(old_text, new_text)
 
-    llm = _get_llm()
-    if llm is None:
-        cat = _keyword_classify(diff)
+    if not OPENAI_API_KEY:
+        logger.warning("OPENAI_API_KEY not set — returning keyword fallback")
         return {
-            "category": cat,
-            "summary": f"Content changed on {competitor_name}'s {section} page. LLM analysis unavailable — set LLM_ENABLED=true and ensure model is downloaded.",
+            "category": _keyword_classify(diff),
+            "summary": None,
             "impact_score": 5,
-            "impact_justification": "Default score (LLM offline).",
-            "strategic_action": "Review the change manually and assess strategic impact.",
+            "impact_justification": None,
+            "strategic_action": None,
         }
 
     profile_ctx = "\n".join([
@@ -151,8 +75,8 @@ async def analyze_change(
     ])
 
     system_msg = (
-        "You are a competitive intelligence analyst. Respond ONLY with a valid JSON object, "
-        "no markdown, no prose before or after."
+        "You are a senior competitive intelligence analyst. "
+        "Respond ONLY with a valid JSON object — no markdown fences, no text before or after."
     )
     user_msg = f"""Business Context:
 {profile_ctx}
@@ -166,42 +90,51 @@ Detected change (diff):
 Return JSON with exactly these keys:
 {{
   "category": "Pricing|Product/Feature|Hiring|Content/Messaging|Leadership|Other",
-  "summary": "<one paragraph plain-English explanation of the change and its significance>",
+  "summary": "<one clear paragraph explaining what changed and why it matters strategically>",
   "impact_score": <integer 1-10>,
   "impact_justification": "<one sentence explaining the score relative to the business context above>",
-  "strategic_action": "<one concrete recommended action>"
+  "strategic_action": "<one concrete, specific action the business should take in response>"
 }}"""
 
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: llm.create_chat_completion(
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user",   "content": user_msg},
-                ],
-                max_tokens=512,
-                temperature=0.1,
-                stop=["```"],
-            ),
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": user_msg},
+            ],
+            max_tokens=600,
+            temperature=0.2,
+            response_format={"type": "json_object"},
         )
-        raw = result["choices"][0]["message"]["content"].strip()
-        # Extract JSON even if model added surrounding text
-        start, end = raw.find("{"), raw.rfind("}") + 1
-        parsed = json.loads(raw[start:end])
+
+        raw = response.choices[0].message.content.strip()
+        parsed = json.loads(raw)
         parsed["impact_score"] = max(1, min(10, int(parsed.get("impact_score", 5))))
         valid_cats = {"Pricing", "Product/Feature", "Hiring", "Content/Messaging", "Leadership", "Other"}
         if parsed.get("category") not in valid_cats:
             parsed["category"] = "Other"
+
+        logger.info(f"OpenAI analysis complete for {competitor_name} — score {parsed['impact_score']}")
         return parsed
+
     except Exception as e:
-        logger.error(f"LLM inference/parse error: {e}")
-        cat = _keyword_classify(diff)
+        logger.error(f"OpenAI analysis failed: {e}")
         return {
-            "category": cat,
-            "summary": f"Change detected on {competitor_name}'s {section}. AI analysis failed — raw diff stored.",
+            "category": _keyword_classify(diff),
+            "summary": None,
             "impact_score": 5,
-            "impact_justification": "Default score due to analysis error.",
-            "strategic_action": "Review manually.",
+            "impact_justification": None,
+            "strategic_action": None,
         }
+
+
+# No-op kept for compatibility — OpenAI needs no local model download
+async def download_model():
+    if OPENAI_API_KEY:
+        logger.info(f"LLM provider: OpenAI ({OPENAI_MODEL})")
+    else:
+        logger.warning("OPENAI_API_KEY not set — AI analysis will be unavailable")

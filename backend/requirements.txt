@@ -14,9 +14,8 @@ aiofiles==24.1.0
 fastembed==0.3.6
 numpy==1.26.4
 
-# Day 3 – Local LLM + CRM
-llama-cpp-python==0.3.2
-huggingface_hub==0.25.2
+# Day 3 – OpenAI LLM + CRM
+openai>=1.0.0
 
 # Day 4 – Digest email
 aiosmtplib==3.0.1
