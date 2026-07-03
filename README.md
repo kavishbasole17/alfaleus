@@ -1,14 +1,73 @@
 # Alfaleus — Competitor Intelligence System
 
-Fully automated competitor monitoring: semantic change detection, AI impact scoring, CRM sync, digest emails, and a Chrome extension. Backend on Render, frontend on Vercel.
+Alfaleus is a fully automated competitor monitoring platform. It watches competitor websites for meaningful changes, classifies them with a local LLM, scores their business impact, syncs intelligence cards to your CRM, delivers weekly email digests, and surfaces everything through a React dashboard and a Chrome extension — all deployable for under $10/month.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [How It Works — Change Detection Pipeline](#how-it-works--change-detection-pipeline)
+- [Memory Budget](#memory-budget)
+- [Quick Start — Local Development](#quick-start--local-development)
+- [Deployment](#deployment)
+  - [Backend → Render](#backend--render)
+  - [Frontend → Vercel](#frontend--vercel)
+  - [Chrome Extension](#chrome-extension)
+- [Environment Variables](#environment-variables)
+- [API Reference](#api-reference)
+- [CRM Integration](#crm-integration)
+- [Email Digest](#email-digest)
+- [Screenshot Archiving](#screenshot-archiving)
+- [Project Structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Features
+
+| Capability | Detail |
+|---|---|
+| **Semantic change detection** | fastembed (ONNX) embeds page text; cosine distance filters cosmetic noise from meaningful changes |
+| **AI impact scoring** | Local Qwen2.5-0.5B LLM classifies each change and assigns a 1–10 impact score with justification and strategic action |
+| **Section-scoped scraping** | Monitor a competitor's full site, pricing page, or careers section independently |
+| **CRM sync** | Pushes intelligence cards to Notion or Airtable with idempotent retry queue |
+| **Weekly email digest** | Rich HTML digest grouped by competitor, sorted by impact score, with top-pick highlights |
+| **Chrome Extension (MV3)** | One-click page tracking directly from the browser; badge auto-updates with unread count |
+| **React dashboard** | Dashboard with charts, intelligence feed, competitor detail views, and onboarding flow |
+| **Screenshot archive** | Playwright captures a full-viewport screenshot at every detected change |
+| **Zero cold-start cost** | Runs on Render Starter ($7/mo) + Vercel Free + local extension — no hosted LLM API costs |
 
 ---
 
 ## Architecture
 
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        Alfaleus                              │
+│                                                              │
+│  Chrome Extension (MV3)                                      │
+│       │  Track page / read badge                             │
+│       ▼                                                      │
+│  React Frontend (Vite) ──────────────────────────────────►  │
+│       │  Dashboard / Feed / Settings      Vercel (Free)      │
+│       ▼                                                      │
+│  FastAPI Backend ──────────────────────────────────────────► │
+│       │  REST API + APScheduler           Render Starter      │
+│       ├── SQLite (aiosqlite)                                 │
+│       ├── httpx + BeautifulSoup  (scraping)                  │
+│       ├── fastembed ONNX         (semantic similarity)       │
+│       ├── llama-cpp Qwen2.5-0.5B (impact scoring)           │
+│       ├── Playwright             (screenshots)               │
+│       ├── Notion / Airtable API  (CRM sync)                 │
+│       └── Gmail SMTP             (digest email)              │
+└──────────────────────────────────────────────────────────────┘
+```
+
 | Layer | Technology | Deployment |
 |---|---|---|
-| Backend API | Python 3.11 + FastAPI | Render (Starter $7/mo) |
+| Backend API | Python 3.11 + FastAPI | Render Starter ($7/mo) |
 | Database | SQLite via aiosqlite | Render persistent disk |
 | Scraping | httpx + BeautifulSoup4 | In-process |
 | Semantic Embeddings | fastembed · BAAI/bge-small-en-v1.5 (ONNX) | In-process |
@@ -22,134 +81,181 @@ Fully automated competitor monitoring: semantic change detection, AI impact scor
 
 ---
 
-## Memory Budget (Render Starter — 512MB)
+## How It Works — Change Detection Pipeline
+
+Every scheduled or manual scrape runs through this pipeline:
+
+```
+1.  httpx fetches the URL with real browser User-Agent headers
+2.  BeautifulSoup strips noise (scripts, nav, footer, SVG) and extracts
+    section-scoped text — full page, pricing section, or careers section
+3.  fastembed (ONNX) computes a 384-dim embedding for the new text
+4.  Cosine distance is calculated against the stored previous embedding
+5.  distance < SEMANTIC_THRESHOLD  →  cosmetic change, skip
+    distance ≥ SEMANTIC_THRESHOLD  →  significant change, continue
+6.  unified_diff extracts the human-readable diff (capped at 3,000 chars)
+7.  Qwen2.5-0.5B classifies the diff and outputs structured JSON:
+      { category, summary, impact_score (1–10), justification, action }
+8.  Playwright captures a full-viewport screenshot of the current page
+9.  Change record is written to SQLite
+10. Record is queued for CRM sync (Notion or Airtable)
+```
+
+**Fallback:** If `LLM_ENABLED=false`, step 7 uses keyword-based classification — zero LLM overhead, sub-second response.
+
+---
+
+## Memory Budget
+
+Render Starter provides **512 MB RAM**. The LLM and embedding model are never simultaneously at peak load:
 
 | Component | RAM |
 |---|---|
 | FastAPI + deps + SQLite | ~60 MB |
 | fastembed (bge-small-en-v1.5 ONNX) | ~80 MB |
-| Qwen2.5-0.5B-Instruct Q4_K_M | ~400 MB peak (loaded on demand) |
+| Qwen2.5-0.5B-Instruct Q4_K_M (peak, on-demand) | ~400 MB |
 | **Total peak** | **~540 MB** |
 
-> **Note:** The LLM and embedding model are never in memory simultaneously at peak load. The LLM loads on demand for each analysis. If you hit OOM issues, set `LLM_ENABLED=false` and the system falls back to keyword-based classification with no LLM overhead.
->
-> For comfort, use **Render Standard ($25/mo)** which provides 2GB RAM.
+> The LLM is loaded on demand per analysis and unloaded after. If you hit OOM, set `LLM_ENABLED=false` to drop to ~140 MB total. For a comfortable baseline, **Render Standard ($25/mo)** gives 2 GB RAM.
 
-### LLM Model Details
+### AI Model Details
 
-| | |
-|---|---|
-| **Model** | Qwen2.5-0.5B-Instruct-Q4_K_M.gguf |
-| **Source** | `Qwen/Qwen2.5-0.5B-Instruct-GGUF` on Hugging Face |
-| **Disk size** | ~354 MB |
-| **RAM at inference** | ~400 MB peak |
-| **Inference time (1 vCPU)** | 30–90 seconds |
-| **Why this model** | Smallest instruction-tuned model with reliable structured JSON output. Q4_K_M provides best quality/size tradeoff for CPU-only inference under 1GB RAM. |
+| | Embedding Model | LLM |
+|---|---|---|
+| **Model** | BAAI/bge-small-en-v1.5 | Qwen2.5-0.5B-Instruct-Q4_K_M.gguf |
+| **Library** | fastembed (ONNX — no PyTorch) | llama-cpp-python |
+| **Disk** | ~33 MB | ~354 MB |
+| **RAM** | ~80 MB | ~400 MB peak |
+| **Inference time** | <100 ms | 30–90 s (1 vCPU) |
+| **Why** | Zero PyTorch dep; fast ONNX; strong semantic quality | Smallest model with reliable structured JSON output; best quality/size at Q4_K_M |
 
-Model downloads automatically to `/app/data/models/` on first startup and is cached to the Render persistent disk.
-
-### Embeddings Model Details
-
-| | |
-|---|---|
-| **Model** | BAAI/bge-small-en-v1.5 |
-| **Library** | fastembed (ONNX runtime — no PyTorch) |
-| **Disk size** | ~33 MB |
-| **RAM** | ~80 MB |
-| **Why** | Zero PyTorch dependency, fast ONNX inference, excellent semantic similarity quality |
+Both models download automatically to `/app/data/models/` on first startup and are cached on the Render persistent disk.
 
 ---
 
-## Quick Start (Local Dev)
+## Quick Start — Local Development
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 18+
+- Git
+
+### 1. Clone and configure
 
 ```bash
-# 1. Backend
+git clone https://github.com/your-username/alfaleus2.git
+cd alfaleus2
 cp .env.example backend/.env
+# Edit backend/.env and fill in your values
+```
+
+### 2. Start the backend
+
+```bash
 cd backend
 pip install -r requirements.txt
-# llama-cpp-python needs a special install:
-pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-python main.py   # runs on http://localhost:8000
 
-# 2. Frontend (separate terminal)
+# llama-cpp-python requires a separate install for CPU builds:
+pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
+python main.py
+# API running at http://localhost:8000
+# Docs at http://localhost:8000/docs
+```
+
+### 3. Start the frontend
+
+Open a new terminal:
+
+```bash
 cd frontend
 npm install
 cp .env.example .env.local
-# VITE_API_URL=http://localhost:8000
-npm run dev      # runs on http://localhost:5173
+# Set VITE_API_URL=http://localhost:8000 in .env.local
+npm run dev
+# App running at http://localhost:5173
 ```
 
+### 4. Load the Chrome extension
+
+1. Open `chrome://extensions/`
+2. Enable **Developer Mode**
+3. Click **Load unpacked** → select the `extension/` folder
+4. Click the extension icon → **⚙ Settings** → enter `http://localhost:8000` and your `API_KEY`
+
 ---
 
-## Deploy: Backend → Render
+## Deployment
+
+### Backend → Render
 
 1. Push this repo to GitHub
-2. Go to [render.com](https://render.com) → New → Web Service → Connect your repo
+2. Go to [render.com](https://render.com) → **New** → **Web Service** → connect your repo
 3. Render auto-detects `render.yaml` — click **Apply**
-4. Add a **Disk** (5GB, mount `/app/data`) in the service settings
-5. In **Environment**, set any optional vars (SMTP, Notion, etc.)
-6. The `API_KEY` is auto-generated — copy it from Render env vars
-7. First deploy takes ~5–10 min (installs llama-cpp-python + Playwright)
+4. Add a **Disk** (5 GB, mount path `/app/data`) in the service dashboard
+5. Set optional environment variables (SMTP, Notion/Airtable) under **Environment**
+6. The `API_KEY` is auto-generated — copy it from Render env vars for the extension and API clients
+7. First deploy takes 5–10 minutes (installs llama-cpp-python and Playwright Chromium)
 
----
-
-## Deploy: Frontend → Vercel
+### Frontend → Vercel
 
 ```bash
 cd frontend
 npm i -g vercel
 vercel
-# Set VITE_API_URL = https://your-render-service.onrender.com
+# When prompted, set VITE_API_URL=https://your-render-service.onrender.com
 vercel --prod
 ```
 
-Or link via Vercel dashboard → Import Git Repository → set `Root Directory` = `frontend`.
+Or import via the Vercel dashboard: **New Project** → **Import Git Repository** → set **Root Directory** to `frontend`.
 
-**Required Vercel env var:**
+**Required environment variable in Vercel:**
 ```
 VITE_API_URL=https://your-app.onrender.com
 ```
 
----
-
-## Chrome Extension Setup
+### Chrome Extension
 
 1. Open `chrome://extensions/`
-2. Enable **Developer Mode** (top right)
+2. Enable **Developer Mode** (top right toggle)
 3. Click **Load unpacked** → select the `extension/` folder
 4. Click the Alfaleus icon → **⚙ Settings**
-5. Paste your **Backend API URL** (Render URL) and **API Key** (from Render env)
-6. Visit any competitor page → click extension → fill form → **Track This Page**
-7. Badge auto-updates every 5 minutes with unread count
+5. Enter your **Backend API URL** (Render URL) and **API Key**
+6. Navigate to any competitor page → click the extension → fill in the form → **Track This Page**
+7. The badge auto-updates every 5 minutes with your unread intelligence count
+
+To distribute the extension, zip the `extension/` folder and load it as an unpacked extension — no Chrome Web Store submission required for internal use.
 
 ---
 
 ## Environment Variables
 
-### Backend (Render)
+### Backend (`backend/.env` or Render Environment)
 
 | Variable | Default | Required | Description |
 |---|---|---|---|
 | `PORT` | `8000` | No | Server port |
-| `DB_PATH` | `/app/data/alfaleus.db` | No | SQLite path |
-| `API_KEY` | auto | **Yes** | Extension + API auth key |
-| `LLM_ENABLED` | `true` | No | Disable to save ~400MB RAM |
-| `SCREENSHOTS_ENABLED` | `true` | No | Disable to save Playwright overhead |
-| `SEMANTIC_THRESHOLD` | `0.15` | No | Cosine distance threshold (0–1). Higher = stricter |
-| `SCRAPE_INTERVAL_MINUTES` | `360` | No | Global minimum between scrapes |
+| `DB_PATH` | `/app/data/alfaleus.db` | No | SQLite database path |
+| `API_KEY` | *(auto)* | **Yes** | Secret key for extension and API auth |
+| `LLM_ENABLED` | `true` | No | Set `false` to disable LLM and save ~400 MB RAM |
+| `SCREENSHOTS_ENABLED` | `true` | No | Set `false` to skip Playwright screenshots |
+| `SEMANTIC_THRESHOLD` | `0.15` | No | Cosine distance threshold (0–1). Lower = more sensitive |
+| `SCRAPE_INTERVAL_MINUTES` | `360` | No | Minimum minutes between scrapes per competitor |
 | `CORS_ORIGINS` | `*` | No | Comma-separated allowed origins |
-| `APP_URL` | `` | No | Vercel URL (included in digest emails) |
+| `APP_URL` | *(empty)* | No | Your Vercel URL — included in digest email CTA |
 | `CRM_PROVIDER` | `notion` | No | `notion` or `airtable` |
-| `NOTION_TOKEN` | `` | CRM | Integration token (`secret_…`) |
-| `NOTION_DB_ID` | `` | CRM | 32-char database ID |
-| `AIRTABLE_TOKEN` | `` | CRM | Personal access token |
-| `AIRTABLE_BASE_ID` | `` | CRM | Base ID (`app…`) |
-| `AIRTABLE_TABLE` | `Intelligence` | CRM | Table name |
-| `SMTP_USER` | `` | Email | Gmail sender address |
-| `SMTP_PASS` | `` | Email | Gmail App Password |
-| `DIGEST_TO` | `` | Email | Recipient address |
+| `NOTION_TOKEN` | *(empty)* | CRM | Notion integration token (`secret_…`) |
+| `NOTION_DB_ID` | *(empty)* | CRM | 32-character Notion database ID |
+| `AIRTABLE_TOKEN` | *(empty)* | CRM | Airtable personal access token (`patXXX…`) |
+| `AIRTABLE_BASE_ID` | *(empty)* | CRM | Airtable base ID (`appXXX…`) |
+| `AIRTABLE_TABLE` | `Intelligence` | No | Airtable table name |
+| `SMTP_USER` | *(empty)* | Email | Gmail sender address |
+| `SMTP_PASS` | *(empty)* | Email | Gmail App Password (16-char, no spaces) |
+| `DIGEST_TO` | *(empty)* | Email | Recipient email address for weekly digest |
+| `DIGEST_CRON` | `0 8 * * 1` | No | Cron expression for digest schedule (default: Monday 8 AM UTC) |
 
-### Frontend (Vercel)
+### Frontend (`frontend/.env.local` or Vercel)
 
 | Variable | Description |
 |---|---|
@@ -159,92 +265,123 @@ VITE_API_URL=https://your-app.onrender.com
 
 ## API Reference
 
+All endpoints require the `X-API-Key` header (or `api_key` query param) matching your `API_KEY` env var.
+
+### Competitors
+
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/health` | Health + LLM status |
-| GET | `/api/competitors` | List all competitors |
-| POST | `/api/competitors` | Add competitor (triggers baseline scrape) |
-| GET | `/api/competitors/:id` | Get competitor details |
-| PUT | `/api/competitors/:id` | Update competitor |
-| DELETE | `/api/competitors/:id` | Delete competitor + all history |
-| POST | `/api/competitors/:id/scrape` | Trigger manual full pipeline |
-| GET | `/api/changes` | List intelligence cards (filter: competitor_id, category, unread_only) |
-| GET | `/api/changes/unread-count` | Badge count for extension |
-| GET | `/api/changes/:id` | Get single change |
-| PATCH | `/api/changes/:id/read` | Mark as read |
-| PATCH | `/api/changes/mark-all-read` | Mark all as read |
-| GET | `/api/settings` | Get all settings (secrets masked) |
-| GET | `/api/settings/profile` | Get business profile |
-| POST | `/api/settings/onboarding` | Save onboarding / settings data |
-| GET | `/api/settings/onboarding-status` | Check if onboarded |
-| GET | `/api/crm/status` | CRM queue status breakdown |
-| POST | `/api/crm/retry` | Retry all failed CRM syncs |
-| POST | `/api/crm/sync/:change_id` | Manually sync a specific change |
+| `GET` | `/api/competitors` | List all competitors |
+| `POST` | `/api/competitors` | Add a competitor (triggers baseline scrape) |
+| `GET` | `/api/competitors/:id` | Get competitor details |
+| `PUT` | `/api/competitors/:id` | Update competitor (name, section, interval, status) |
+| `DELETE` | `/api/competitors/:id` | Delete competitor and all history |
+| `POST` | `/api/competitors/:id/scrape` | Trigger an immediate full pipeline run |
+
+**Add competitor request body:**
+```json
+{
+  "name": "Acme Corp",
+  "url": "https://acme.com",
+  "section": "full",
+  "check_interval": 360
+}
+```
+`section` options: `full` · `pricing` · `careers`
+
+### Intelligence Changes
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/changes` | List intelligence cards — supports `?competitor_id=`, `?category=`, `?unread_only=true` |
+| `GET` | `/api/changes/unread-count` | Badge count for Chrome extension |
+| `GET` | `/api/changes/:id` | Get a single change card |
+| `PATCH` | `/api/changes/:id/read` | Mark a card as read |
+| `PATCH` | `/api/changes/mark-all-read` | Mark all cards as read |
+
+### Settings
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/settings` | Get all settings (secrets masked) |
+| `GET` | `/api/settings/profile` | Get business profile |
+| `POST` | `/api/settings/onboarding` | Save onboarding and settings data |
+| `GET` | `/api/settings/onboarding-status` | Check whether onboarding is complete |
+
+### CRM
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/crm/status` | CRM queue breakdown (pending / processing / done / failed) |
+| `POST` | `/api/crm/retry` | Retry all failed CRM syncs |
+| `POST` | `/api/crm/sync/:change_id` | Manually sync a specific change |
+
+### Health
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/health` | Service health + LLM model status |
 
 ---
 
-## Change Detection Pipeline
+## CRM Integration
 
-```
-1. httpx fetches URL with real browser UA headers
-2. BeautifulSoup extracts section-scoped text (full / pricing / careers)
-3. fastembed computes ONNX embedding for new content
-4. Cosine distance vs. previous snapshot embedding
-5. If distance < SEMANTIC_THRESHOLD → cosmetic change, skip
-6. If distance ≥ SEMANTIC_THRESHOLD → significant change detected
-7. unified_diff extracts what actually changed (up to 3,000 chars)
-8. Qwen2.5-0.5B LLM classifies and scores the diff
-9. JSON output stored: category, summary, impact_score (1-10), justification, action
-10. Playwright captures screenshot → /app/data/screenshots/
-11. Change record created → queued for CRM sync
-```
+Intelligence cards are pushed to Notion or Airtable automatically after each detection. Both integrations are idempotent — the change ID is embedded in the record name, and the system queries for an existing record before creating a new one, preventing duplicates even after retries.
 
----
-
-## CRM Sync
-
-Intelligence cards are pushed to Notion or Airtable automatically after detection.
-
-**Idempotency:** Each change has a unique ID embedded in the record name. Before creating, the system queries for an existing record with that ID, preventing duplicates even if the queue is retried.
-
-**Retry queue:** Failed pushes are retried up to 5 times with status tracking (`pending → processing → done/failed`). Retry all failed from the Settings page or via `POST /api/crm/retry`.
+**Retry queue:** Failed pushes track status (`pending → processing → done / failed`) and are retried up to 5 times. Trigger a retry sweep from the Settings page or via `POST /api/crm/retry`.
 
 ### Notion Setup
+
 1. Create an integration at [notion.so/my-integrations](https://www.notion.so/my-integrations)
 2. Create a database with these properties:
-   - `Name` (Title), `URL` (URL), `Category` (Select), `Impact Score` (Number), `Summary` (Text), `Strategic Action` (Text), `Detected At` (Date), `Change ID` (Text)
-3. Share the database with your integration
-4. Copy Integration Token + Database ID → Settings page
+
+   | Property | Type |
+   |---|---|
+   | `Name` | Title |
+   | `URL` | URL |
+   | `Category` | Select |
+   | `Impact Score` | Number |
+   | `Summary` | Text |
+   | `Strategic Action` | Text |
+   | `Detected At` | Date |
+   | `Change ID` | Text |
+
+3. Open the database → **Share** → invite your integration
+4. Copy the **Integration Token** and **Database ID** → paste into the Alfaleus Settings page
 
 ### Airtable Setup
-1. Create base at [airtable.com](https://airtable.com)
-2. Add table `Intelligence` with columns matching above
-3. Generate Personal Access Token at [airtable.com/create/tokens](https://airtable.com/create/tokens)
-4. Copy Token + Base ID → Settings page
+
+1. Create a base at [airtable.com](https://airtable.com) and add a table named `Intelligence` with columns matching the Notion schema above
+2. Generate a Personal Access Token at [airtable.com/create/tokens](https://airtable.com/create/tokens) with `data.records:write` scope
+3. Copy the **Token** and **Base ID** → paste into the Alfaleus Settings page
 
 ---
 
-## Digest Email
+## Email Digest
 
-- Sent every **Monday at 8:00 AM UTC** (configurable)
-- Groups cards by competitor, sorted by Impact Score descending
-- Highlights top 3 picks across all competitors
-- Skips sending if no new changes since last digest
-- Uses Gmail SMTP with App Password (free, no paid API)
+- Sent on a cron schedule — default: **every Monday at 8:00 AM UTC** (configurable via `DIGEST_CRON`)
+- Groups intelligence cards by competitor, sorted by Impact Score descending
+- Highlights the top 3 picks across all competitors
+- Skips sending if no new changes have been detected since the last digest
+- Delivered via Gmail SMTP with App Password — no paid email API required
 
-**Gmail App Password:** [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) — requires 2FA enabled on your Google account.
+**How to get a Gmail App Password:**
+1. Enable 2-Step Verification on your Google account
+2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+3. Create a password for "Mail" → copy the 16-character code into `SMTP_PASS`
 
 ---
 
-## Screenshot Archiving (Bonus — Day 5)
+## Screenshot Archiving
 
-Before each change is recorded, Playwright captures a full-viewport screenshot of the current page state. Screenshots are:
-- Stored at `/app/data/screenshots/` (persisted on Render disk)
-- Accessible via `/api/screenshots/{filename}` 
-- Linked in the intelligence card detail modal as "View Screenshot"
-- Named `{competitor_id}_{type}_{timestamp}.png`
+Playwright captures a full-viewport screenshot immediately before each change is recorded. Screenshots are:
 
-Set `SCREENSHOTS_ENABLED=false` to disable if Playwright causes memory issues.
+- Stored at `/app/data/screenshots/` on the Render persistent disk
+- Served via `/api/screenshots/{filename}`
+- Linked inside the intelligence card detail modal as **"View Screenshot"**
+- Named using the pattern `{competitor_id}_{type}_{timestamp}.png`
+
+Set `SCREENSHOTS_ENABLED=false` to disable Playwright entirely if memory is constrained.
 
 ---
 
@@ -252,75 +389,72 @@ Set `SCREENSHOTS_ENABLED=false` to disable if Playwright causes memory issues.
 
 ```
 alfaleus2/
-├── backend/                   # FastAPI → Render
-│   ├── main.py                # App entrypoint, lifespan, CORS, routers
-│   ├── config.py              # Env var loading
-│   ├── database.py            # SQLite schema + async connection
-│   ├── models.py              # Pydantic schemas
-│   ├── scheduler.py           # APScheduler (scrape/CRM queue/digest)
+├── backend/                    # FastAPI application → Render
+│   ├── main.py                 # App entrypoint, lifespan, CORS, router registration
+│   ├── config.py               # Environment variable loading
+│   ├── database.py             # SQLite schema + async connection pool
+│   ├── models.py               # Pydantic request/response schemas
+│   ├── scheduler.py            # APScheduler (scrape loop, CRM queue, digest)
 │   ├── requirements.txt
 │   ├── routers/
-│   │   ├── competitors.py     # CRUD + full scrape pipeline
-│   │   ├── changes.py         # Intelligence feed endpoints
-│   │   ├── settings.py        # Onboarding + profile
-│   │   └── crm.py             # Queue status + retry
+│   │   ├── competitors.py      # Competitor CRUD + scrape pipeline trigger
+│   │   ├── changes.py          # Intelligence feed endpoints
+│   │   ├── settings.py         # Onboarding and business profile
+│   │   └── crm.py              # CRM queue status and retry
 │   └── services/
-│       ├── scraper.py         # httpx + BeautifulSoup fetch
-│       ├── embeddings.py      # fastembed cosine similarity
-│       ├── llm.py             # llama-cpp-python + model download
-│       ├── crm.py             # Notion + Airtable push
-│       ├── email_digest.py    # Gmail SMTP digest
-│       └── screenshot.py      # Playwright capture
-├── frontend/                  # React/Vite → Vercel
+│       ├── scraper.py          # httpx fetch + BeautifulSoup section extraction
+│       ├── embeddings.py       # fastembed cosine similarity (ONNX)
+│       ├── llm.py              # llama-cpp-python + auto model download
+│       ├── crm.py              # Notion + Airtable push with idempotency
+│       ├── email_digest.py     # HTML digest builder + Gmail SMTP sender
+│       └── screenshot.py       # Playwright full-viewport capture
+│
+├── frontend/                   # React 18 + Vite → Vercel
 │   ├── package.json
 │   ├── vite.config.js
 │   ├── vercel.json
 │   └── src/
-│       ├── api/index.js       # Typed fetch client
+│       ├── api/index.js        # Typed fetch client for all backend endpoints
 │       ├── context/AppContext.jsx
 │       ├── styles/globals.css
-│       ├── components/        # Sidebar, Topbar, Cards, Modals, Onboarding
-│       └── pages/             # Dashboard, Feed, CompetitorDetail, Settings
-├── extension/                 # Chrome Extension MV3 (no build step)
+│       ├── components/         # Sidebar, Topbar, Cards, Modals, OnboardingFlow
+│       └── pages/              # Dashboard, Feed, CompetitorDetail, Settings
+│
+├── extension/                  # Chrome Extension MV3 (no build step needed)
 │   ├── manifest.json
-│   ├── popup.html / popup.js
-│   ├── settings.html / settings.js
-│   ├── background.js          # Service worker + badge polling
+│   ├── popup.html / popup.js   # One-click page tracking UI
+│   ├── settings.html / settings.js  # API URL + key configuration
+│   ├── background.js           # Service worker + 5-minute badge polling
 │   └── icons/
-├── render.yaml                # Render IaC config
-├── Dockerfile                 # Alternative Docker deploy
+│
+├── .env.example                # Environment variable template
+├── render.yaml                 # Render IaC (web service + disk)
+├── Dockerfile                  # Alternative Docker deployment
 └── README.md
 ```
 
 ---
 
-## Day-by-Day Progress
-
-- [x] **Day 1** — Scaffold, SQLite, FastAPI routing, basic scraper, frontend shell
-- [x] **Day 2** — fastembed semantic similarity, `semantic_distance` change detection, scheduler
-- [x] **Day 3** — llama-cpp-python Qwen2.5-0.5B, JSON impact scoring, Notion/Airtable CRM with retry queue
-- [x] **Day 4** — Gmail digest email, Chrome Extension MV3 with auto badge counter
-- [x] **Day 5** — Playwright screenshot archive, React frontend (Vite/Vercel), Render deployment, comprehensive README
-
----
-
 ## Troubleshooting
 
-**LLM is slow / timing out**
-- First inference after startup is slow (model loads into RAM). Subsequent calls are faster.
-- Set `LLM_ENABLED=false` to use keyword-based fallback classification (instant).
+**LLM is slow on first request**
+The model loads into RAM on the first inference after startup. Subsequent calls within the same process are faster. This is expected behavior — Render keeps the process alive between requests.
 
-**Out of Memory on Render Free Tier**
-- Upgrade to Render Starter ($7/mo) for 512MB, or Standard ($25) for 2GB.
-- Set `LLM_ENABLED=false` + `SCREENSHOTS_ENABLED=false` to run under 200MB.
+**Out of Memory on Render**
+- Upgrade to Render Starter ($7/mo) for 512 MB or Render Standard ($25/mo) for 2 GB
+- Set `LLM_ENABLED=false` + `SCREENSHOTS_ENABLED=false` to run the full stack under 200 MB
+
+**No changes detected despite the page visibly changing**
+- Lower `SEMANTIC_THRESHOLD` (e.g., `0.08`) to increase sensitivity
+- Check the competitor's `last_checked` timestamp — the check interval may not have elapsed yet
+- Trigger a manual scrape immediately via `POST /api/competitors/:id/scrape`
 
 **CRM sync failing**
-- Check CRM token hasn't expired.
-- Notion: ensure the database is shared with your integration.
-- Airtable: ensure PAT has `data.records:write` scope.
-- Check `GET /api/crm/status` for pending/failed counts.
+- Verify your token hasn't expired or been revoked
+- Notion: confirm the database is shared with your integration (Share → Invite)
+- Airtable: confirm the PAT has `data.records:write` scope on the correct base
+- Check `GET /api/crm/status` for pending/failed counts and `POST /api/crm/retry` to reprocess
 
-**No changes detected despite page changing**
-- Lower `SEMANTIC_THRESHOLD` (e.g., `0.08`) to be more sensitive.
-- Check `last_checked` on the competitor — interval may not have elapsed yet.
-- Trigger a manual scrape via `POST /api/competitors/:id/scrape`.
+**Extension badge not updating**
+- Open extension Settings and verify the API URL (no trailing slash) and API Key match your Render deployment
+- Check that your Render service is awake (free tier sleeps after inactivity — Starter tier stays awake)
